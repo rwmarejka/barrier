@@ -29,43 +29,22 @@ extern "C" {
 #define	_POSIX_PTHREAD_SEMANTICS
 #define	PTHREAD_BARRIER_INITIALIZER(n)	{PTHREAD_MUTEX_INITIALIZER,PTHREAD_COND_INITIALIZER,(n),(n),0}
 
-#if defined(sun)
+#if !defined(sun)
 #	define	USYNC_PROCESS	PTHREAD_SCOPE_SYSTEM
 #	define	USYNC_THREAD	PTHREAD_SCOPE_PROCESS
-
-#	define	SEM_TYPE        sema_t
-#	define	SEM_PRIVATE     USYNC_THREAD
-#	define	SEM_SHARED      USYNC_PROCESS
-#	define	SEM_INIT(s,p)	sema_init((s),0,(p),NULL)
-#	define	SEM_DESTROY(s)	sema_destroy(s)
-#	define	SEM_WAIT(s)     sema_wait(s)
-#	define	SEM_POST(s)     sema_post(s)
-#else
-#	define	SEM_TYPE        sem_t
-#	define	SEM_DESTROY(s)
-#	define	SEM_WAIT(s)     sem_wait(s)
-#	define	SEM_POST(s)     sem_post(s)
 #endif
 
 /* Data Definitions         */
 
 #if   (BARRIER_VERSION == 1)
 #elif (BARRIER_VERSION == 3)
-#elif (BARRIER_VERSION == 6)
-#elif (BARRIER_VERSION == 7)
-
-typedef struct _list {
-	SEM_TYPE        sem;
-	struct _list	*next;
-} waitlist_t;
-
 #elif (BARRIER_VERSION == 8)
 #endif
 
 typedef struct {
     unsigned        limit;          /* maximum number of waiters        */
     unsigned        runners;        /* current number of runners        */
-    pthead_mutex_t  lk;             /* lock to protect it all           */
+    pthread_mutex_t  lk;            /* lock to protect it all           */
 #if (BARRIER_VERSION == 1)
     struct _sb {
         pthread_cond_t  cv;         /* cv for waiters at barrier        */
@@ -76,13 +55,8 @@ typedef struct {
 #elif (BARRIER_VERSION == 3)
     pthread_cond_t	cv;             /* rendezvous point                 */
 	unsigned        generation;     /* barrier usage generation         */
-#elif (BARRIER_VERSION == 6)
-	SEM_TYPE        **waiters;      /* array of waiters                 */
-#elif (BARRIER_VERSION == 7)
-	int             pshared;        /* visibility|scope                 */
-	waitlist_t      *head;          /* head of wait list                */
 #elif (BARRIER_VERSION == 8)
-    SEM_TYPE        waiters[];      /* array of waiters                 */
+    sem_t           **waiters;      /* array of waiters                 */
 #endif
 } barrier_t;
 

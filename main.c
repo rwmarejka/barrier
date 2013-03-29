@@ -1,4 +1,4 @@
-#define BARRIER_VERSION (3)
+#define BARRIER_VERSION (8)
 
 #include <barrier.h>
 
@@ -7,6 +7,8 @@
 
 #define	NTHR	4
 #define	NITER	1000
+
+static  barrier_t   ba;
 
 	void *
 bthread( barrier_t *ba ) {
@@ -25,7 +27,6 @@ main( int argc, char *argv[] ) {
 	int		niter	= NITER;
 	int		nthr	= NTHR;
 	int		bound	= 0;
-	barrier_t	ba;
 	pthread_attr_t	attr;
 
 	while ( ( c = getopt( argc, argv, "i:t:bps" ) ) != EOF )
