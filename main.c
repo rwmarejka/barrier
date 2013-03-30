@@ -1,9 +1,12 @@
-#define BARRIER_VERSION (8)
+/*
+ * M A I N - test
+ */
 
 #include <barrier.h>
-
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
 
 #define	NTHR	4
 #define	NITER	1000
