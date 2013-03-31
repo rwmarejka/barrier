@@ -64,7 +64,7 @@ barrier_init( barrier_t *bp, unsigned count ) {
 
 #elif (BARRIER_VERSION == BARRIER_SEMAPHORE)
     
-    if ( bp->waiters = (sem_t **) calloc( count, sizeof( sem_t * ) ) ) {
+    if ( bp->waiters = (sem_t **) calloc( count - 1, sizeof( sem_t * ) ) ) {
         static pthread_mutex_t  sem_lk      = PTHREAD_MUTEX_INITIALIZER;
         static unsigned         sem_count   = 0;
 
@@ -73,7 +73,7 @@ barrier_init( barrier_t *bp, unsigned count ) {
 
         pthread_mutex_lock( &sem_lk );
 
-        for ( i=0; i < count; ++i ) {
+        for ( i=0; i < ( count - 1 ); ++i ) {
             char    buf[MAXPATHLEN];
 
             snprintf( buf, sizeof( buf ), "/barrier/%06u/%04u", pid, ++sem_count );
@@ -117,10 +117,17 @@ barrier_wait( barrier_t *bp ) {
 
         pthread_cond_broadcast( &sbp->cv ); /* wake up the waiters                          */
     } else {
+        int     cs_prev;
+		int     cs_ignore;
+        
         sbp->runners--;                     /* one less runner                              */
+
+        pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &cs_prev );
 
         while ( sbp->runners != bp->limit )
             pthread_cond_wait( &sbp->cv, &sbp->lk );
+
+        pthread_setcancelstate( cs_prev, &cs_ignore );
     }
 
     pthread_mutex_unlock( &sbp->lk );       /* release the sub-barrier lock                 */
@@ -158,7 +165,7 @@ barrier_wait( barrier_t *bp ) {
 
 	if ( bp->runners == 1 ) {               /* last thread to reach barrier                 */
 		unsigned    i;
-		unsigned	limit	= bp->limit;
+		unsigned	limit	= bp->limit - 1;
 
         bp->runners	= bp->limit;            /* reset the number of running threads          */
 		pthread_mutex_unlock( &bp->lk );    /* release the lock                             */
@@ -226,7 +233,7 @@ barrier_destroy( barrier_t *bp ) {
                                             /* release all of the semaphores                */
 	{
 		unsigned	i;
-		unsigned	limit	= bp->limit;
+		unsigned	limit	= bp->limit - 1;
 
         for ( i=0; i < limit; ++i )
             sem_close( bp->waiters[i] );

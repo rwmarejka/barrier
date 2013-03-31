@@ -26,13 +26,12 @@ int
 main( int argc, char *argv[] ) {
 	int		c;
 	int		i;
-	int		pshared	= PTHREAD_PROCESS_PRIVATE;
 	int		niter	= NITER;
 	int		nthr	= NTHR;
 	int		bound	= 0;
 	pthread_attr_t	attr;
 
-	while ( ( c = getopt( argc, argv, "i:t:bps" ) ) != EOF )
+	while ( ( c = getopt( argc, argv, "i:t:b" ) ) != EOF )
 		switch ( c ) {
 		  case 'i' :
 			niter	= atoi( optarg );
@@ -46,16 +45,8 @@ main( int argc, char *argv[] ) {
 			bound	= 1;
 			break;
 
-		  case 'p' :
-			pshared	= PTHREAD_PROCESS_PRIVATE;
-			break;
-
-		  case 's' :
-			pshared	= PTHREAD_PROCESS_SHARED;
-			break;
-
 		  default  :
-			fprintf( stderr, "usage: barrier -i N -t N -b -p -s\n" );
+			fprintf( stderr, "usage: barrier -i N -t N -b\n" );
 			exit( 1 );
 		}
 
