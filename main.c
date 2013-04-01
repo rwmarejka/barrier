@@ -50,7 +50,11 @@ main( int argc, char *argv[] ) {
 			exit( 1 );
 		}
 
-	barrier_init( &ba, nthr + 1 );
+	if ( i = barrier_init( &ba, nthr + 1 ) ) {
+        fprintf( stderr, "barrer_init: %d\n", i );
+        exit( 1 );
+    }
+
 	pthread_attr_init( &attr );
 
 	if ( bound )

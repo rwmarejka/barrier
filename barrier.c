@@ -76,9 +76,9 @@ barrier_init( barrier_t *bp, unsigned count ) {
         for ( i=0; i < ( count - 1 ); ++i ) {
             char    buf[MAXPATHLEN];
 
-            snprintf( buf, sizeof( buf ), "/barrier/%06u/%04u", pid, ++sem_count );
+            snprintf( buf, sizeof( buf ), "/barrier-%06u-%04u", pid, ++sem_count );
 
-            if ( ( bp->waiters[i] = sem_open( buf, O_CREAT | O_EXCL, 0 ) ) == SEM_FAILED ) {
+            if ( ( bp->waiters[i] = sem_open( buf, O_CREAT | O_EXCL, 0644, 0 ) ) == SEM_FAILED ) {
                 status  = errno;
                 break;
             }
