@@ -1,103 +1,97 @@
 /*
-%  cc -DUNITTEST=0 -I. -mt -Xa -v -c -O barrier.c
-%t cc -DUNITTEST=1 -I. -mt -Xa -v -g -o barrier barrier.c -lpthread -lthread
-%l cc -I. -mt -Xa -v -xO4 -G -Kpic -z defs -o barrier.so barrier.c -lthread -lc
+ * B A R R I E R
  *
- * BARRIER(3T) - implement a barrier mechanism.
- *
- *	int	barrier_init( barrier_t *bp, int count, int type, void *arg );
- *	int	barrier_wait( barrier_t *bp );
- *	int	barrier_destroy( barrier_t *bp );
- *
- * written : Richard.Marejka@Sun.COM 1995.07.29
- * modified: Richard.Marejka@Sun.COM 2001.03.02
- *		- error detection
- *		- pshared member added for semaphore usage
- *		- compile-time choice of Unix Intl or POSIX semaphore.
+ * The semaphore version is covered by US patent 7,512,950
  */
 
-#pragma ident "@(#) barrier.c 1.16 02/06/10 Richard.Marejka@Sun.COM"
-
-/* Feature Test Macros	*/
-
-#define BARRIER_VERSION     (7)
-
-/* Include Files	*/
+/* Feature Test Macros      */
+/* Include Files            */
 
 #include <barrier.h>
-#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <sys/param.h>
+#include <stdlib.h>
+#include <unistd.h>
 
-/* Constants & Macros	*/
-
-/* Data Declarations	*/
-
-/* P R I V A T E   I N T E R F A C E S			*/
-
-#if !defined(__sun)
-
-/*
- * If we are not on a Sun system (i.e. Solaris), then map the Solaris
- * semaphore interfaces to the POSIX semaphore interfaces. Make the
- * interfaces private (read: static) so as not to pollute the ABI of
- * wherever we are running (i.e. not Solaris).
- */
-
-static int
-sema_init( sema_t *sp, unsigned value, int type, void *arg ) {
-	int	pshared;
-
-	switch ( type ) {
-	  case USYNC_PROCESS	:
-		pshared	= PTHREAD_SCOPE_SYSTEM;
-		break;
-
-	  case USYNC_THREAD	:
-		pshared	= PTHREAD_SCOPE_PROCESS;
-		break;
-
-	  default		:
-		return( EINVAL );
-		/*NOTREACHED*/
-	}
-
-	return( sem_init( sp, pshared, value ) );
-}
-
-static int
-sema_wait( sema_t *sp ) {
-	return( sem_wait( sp ) );
-}
-
-static int
-sema_post( sema_t *sp ) {
-	return( sem_post( sp ) );
-}
-
-static int
-sema_destroy( sema_t *sp ) {
-	return( sem_destroy( sp ) );
-}
-#endif	/* !defined(__sun)	*/
+/* Constants & Macros       */
+/* Data Declarations        */
+/* External Declarations	*/
 
 /*
- * barrier_init - initialize a barrier variable (count,pshared).
+ * barrier_init - initialize a barrier variable.
  *
  * Return zero for success or an errno(2) value on failure.
- *
  */
 
 	int
 barrier_init( barrier_t *bp, unsigned count ) {
-	int	status;
+	int	status  = 0;
 
-	if ( count == 0 )
-		return( EDOM );
+    if ( count < 1 )
+        return EINVAL;
 
-	bp->maxcnt	= count;
-	bp->runners	= count;
-	bp->head	= NULL;
+    bp->limit   = count;
+	bp->runners = count;
 
-	status	= pthread_mutex_init( &(bp->wait_lk), NULL );
+    if ( status = pthread_mutex_init( &bp->lk, NULL ) )
+        return status;
+
+#if (BARRIER_VERSION == BARRIER_SUBBARRIER)
+
+    {
+        int i;
+
+        bp->sbp = &bp->sb[0];
+
+        for ( i=0; i < 2; ++i ) {
+            struct _sb  *sbp    = &( bp->sb[i] );
+
+            sbp->runners    = count;
+
+            if ( status = pthread_mutex_init( &sbp->lk, NULL ) )
+                return status;
+
+            if ( status = pthread_cond_init( &sbp->cv, NULL ) )
+                return status;
+        }
+    }
+    
+#elif (BARRIER_VERSION == BARRIER_GENERATION)
+
+	bp->generation	= 0;
+	status          = pthread_cond_init( &bp->cv, NULL );
+
+#elif (BARRIER_VERSION == BARRIER_SEMAPHORE)
+    
+    if ( bp->waiters = (sem_t **) calloc( count - 1, sizeof( sem_t * ) ) ) {
+        static pthread_mutex_t  sem_lk      = PTHREAD_MUTEX_INITIALIZER;
+        static unsigned         sem_count   = 0;
+
+        unsigned    pid = getpid();
+        unsigned    i;
+
+        pthread_mutex_lock( &sem_lk );
+
+        for ( i=0; i < ( count - 1 ); ++i ) {
+            char    buf[MAXPATHLEN];
+
+            snprintf( buf, sizeof( buf ), "/barrier-%06u-%04u", pid, ++sem_count );
+
+            if ( ( bp->waiters[i] = sem_open( buf, O_CREAT | O_EXCL, 0644, 0 ) ) == SEM_FAILED ) {
+                status  = errno;
+                break;
+            }
+        }
+
+        pthread_mutex_unlock( &sem_lk );
+
+        if ( status )
+            free( bp->waiters );
+	} else
+		status	= ENOMEM;
+    
+#endif
 
 	return( status );
 }
@@ -111,65 +105,98 @@ barrier_init( barrier_t *bp, unsigned count ) {
 barrier_wait( barrier_t *bp ) {
 	int	status	= 0;
 
-	/* First: get the lock.						*/
+#if (BARRIER_VERSION == BARRIER_SUBBARRIER)
 
-	pthread_mutex_lock( &bp->wait_lk );
+    struct _sb  *sbp    = bp->sbp;          /* which sub-barrier?                           */
 
-	/* Check the pre-conditions, implicit is ( bp != NULL )		*/
+    pthread_mutex_lock( &sbp->lk );         /* acquire the sub-barrier lock                 */
 
-	assert( bp->runners >= 1 );
-	assert( bp->maxcnt  >= 1 );
+    if ( sbp->runners == 1 ) {              /* last thread to reach barrier                 */
+        sbp->runners    = bp->limit;        /* reset runner count and switch sub-barriers   */
+        bp->sbp         = ( bp->sbp == &bp->sb[0] )? &bp->sb[1] : &bp->sb[0];
 
-	if ( bp->runners == 1 ) {	/* last thread to reach barrier	*/
-		if ( bp->maxcnt != 1 ) {
-			waitlist_t	*hp;
+        pthread_cond_broadcast( &sbp->cv ); /* wake up the waiters                          */
+    } else {
+        int     cs_prev;
+		int     cs_ignore;
+        
+        sbp->runners--;                     /* one less runner                              */
 
-			/*
-			 * Traverse the list, posting to each waiter.
-			 */
+        pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &cs_prev );
 
-			for ( hp = bp->head; hp; hp = hp->next )
-				sema_post( &hp->sem );
+        while ( sbp->runners != bp->limit )
+            pthread_cond_wait( &sbp->cv, &sbp->lk );
 
-			/* Reset for the next iteration			*/
+        pthread_setcancelstate( cs_prev, &cs_ignore );
+    }
 
-			bp->head	= NULL;
-			bp->runners	= bp->maxcnt;
-		}
+    pthread_mutex_unlock( &sbp->lk );       /* release the sub-barrier lock                 */
 
-		/* Begin the next cycle					*/
+#elif (BARRIER_VERSION == BARRIER_GENERATION)
 
-		pthread_mutex_unlock( &bp->wait_lk );
+	pthread_mutex_lock( &bp->lk );          /* acquire the lock                             */
+
+	if ( bp->runners == 1 ) {               /* last thread to reach barrier                 */
+		bp->generation++;                   /* crank generation number                      */
+		bp->runners	= bp->limit;            /* reset number of running threads              */
+
+		pthread_cond_broadcast( &bp->cv );
 	} else {
-		waitlist_t	waiter;	/* my element in the wait list	*/
+		int         cs_prev;
+		int         cs_ignore;
+		unsigned	genx	= bp->generation;
 
-		bp->runners--;		/* one less runner		*/
+		bp->runners--;                      /* one less running thread                      */
 
-		/*
-		 * Initialize our semaphore (for blocking) and add it to
-		 * the waiters list.
-		 */
+                                            /* wait until the generation number changes     */
+		pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &cs_prev );
 
-		sema_init( &waiter.sem, 0, bp->pshared, NULL );
+		while ( bp->generation == genx )
+			pthread_cond_wait( &bp->cv, &bp->lk );
 
-		waiter.next	= bp->head;
-		bp->head	= &waiter;
-
-		/*
-		 * Now that we're on the wait list, allow the next
-		 * thread in.
-		 */
-
-		pthread_mutex_unlock( &bp->wait_lk );
-
-		/* wait for the last thread to arrive.		*/
-
-		while ( ( status = sema_wait( &waiter.sem ) ) == EINTR )
-			;
-
-		assert( status == 0 );
-		sema_destroy( &waiter.sem );
+		pthread_setcancelstate( cs_prev, &cs_ignore );
 	}
+
+	pthread_mutex_unlock( &bp->lk );        /* release the lock                             */
+
+#elif (BARRIER_VERSION == BARRIER_SEMAPHORE)
+
+	pthread_mutex_lock( &bp->lk );          /* acquire the lock                             */
+
+	if ( bp->runners == 1 ) {               /* last thread to reach barrier                 */
+		unsigned    i;
+		unsigned	limit	= bp->limit - 1;
+
+        bp->runners	= bp->limit;            /* reset the number of running threads          */
+		pthread_mutex_unlock( &bp->lk );    /* release the lock                             */
+
+        /*
+         * The waiters are awoken by a post. Note the order of post and wait allocation
+         * are the same: 0 to bp->limit - 1. The post can be done outside of the lock
+         * because the order is the same. Should a waiter re-enter, it will be acquire
+         * a "free" semaphore.
+         */
+
+		for ( i=0; i < limit; ++i )
+			sem_post( bp->waiters[i] );
+	} else {
+		int     cs_prev;
+		int     cs_ignore;
+                                            /* allocate a semaphore for the waiting thread  */
+        sem_t   *wp = bp->waiters[ bp->limit - bp->runners-- ];
+
+		pthread_mutex_unlock( &bp->lk );    /* release the lock                             */
+
+                                            /* wait for the post                            */
+		pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &cs_prev );
+
+		while ( sem_wait( wp ) == EINTR )
+			;   /* LINTED - empty loop	*/
+
+		pthread_setcancelstate( cs_prev, &cs_ignore );
+	}
+
+#endif
 
 	return( status );
 }
@@ -181,13 +208,47 @@ barrier_wait( barrier_t *bp ) {
 
 	int
 barrier_destroy( barrier_t *bp ) {
+    int status  = 0;
 
-	assert( bp->head == NULL );
-	assert( bp->runners == bp->maxcnt );
+    pthread_mutex_lock( &bp->lk );          /* acquire the lock                             */
 
-	bp->maxcnt	= 0;
+#if (BARRIER_VERSION == BARRIER_SUBBARRIER)
+
+    bp->sb[0].runners   = 0;                /* release the sub-barriers                     */
+    bp->sb[1].runners   = 0;
+    bp->sbp             = NULL;
+
+    pthread_cond_destroy( &bp->sb[0].cv );
+    pthread_cond_destroy( &bp->sb[1].cv );
+
+    pthread_mutex_destroy( &bp->sb[0].lk );
+    pthread_mutex_destroy( &bp->sb[1].lk );
+
+#elif (BARRIER_VERSION == BARRIER_GENERATION)
+
+	bp->generation	= 0;
+	pthread_cond_destroy( &bp->cv );
+
+#elif (BARRIER_VERSION == BARRIER_SEMAPHORE)
+                                            /* release all of the semaphores                */
+	{
+		unsigned	i;
+		unsigned	limit	= bp->limit - 1;
+
+        for ( i=0; i < limit; ++i )
+            sem_close( bp->waiters[i] );
+
+		free( bp->waiters );
+        bp->waiters	= NULL;
+	}
+
+#endif
+
+    bp->limit	= 0;
 	bp->runners	= 0;
-	bp->pshared	= 0;
 
-	return( pthread_mutex_destroy( &bp->wait_lk ) );
+    pthread_mutex_unlock( &bp->lk );        /* release the lock                             */
+    pthread_mutex_destroy( &bp->lk );       /* destroy the lock                             */
+
+    return status;
 }

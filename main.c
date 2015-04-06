@@ -1,12 +1,17 @@
-#define BARRIER_VERSION (3)
+/*
+ * M A I N - test
+ */
 
 #include <barrier.h>
-
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
 
 #define	NTHR	4
 #define	NITER	1000
+
+static  barrier_t   ba;
 
 	void *
 bthread( barrier_t *ba ) {
@@ -21,14 +26,12 @@ int
 main( int argc, char *argv[] ) {
 	int		c;
 	int		i;
-	int		pshared	= PTHREAD_PROCESS_PRIVATE;
 	int		niter	= NITER;
 	int		nthr	= NTHR;
 	int		bound	= 0;
-	barrier_t	ba;
 	pthread_attr_t	attr;
 
-	while ( ( c = getopt( argc, argv, "i:t:bps" ) ) != EOF )
+	while ( ( c = getopt( argc, argv, "i:t:b" ) ) != EOF )
 		switch ( c ) {
 		  case 'i' :
 			niter	= atoi( optarg );
@@ -42,20 +45,16 @@ main( int argc, char *argv[] ) {
 			bound	= 1;
 			break;
 
-		  case 'p' :
-			pshared	= PTHREAD_PROCESS_PRIVATE;
-			break;
-
-		  case 's' :
-			pshared	= PTHREAD_PROCESS_SHARED;
-			break;
-
 		  default  :
-			fprintf( stderr, "usage: barrier -i N -t N -b -p -s\n" );
+			fprintf( stderr, "usage: barrier -i N -t N -b\n" );
 			exit( 1 );
 		}
 
-	barrier_init( &ba, nthr + 1 );
+	if ( i = barrier_init( &ba, nthr + 1 ) ) {
+        fprintf( stderr, "barrer_init: %d\n", i );
+        exit( 1 );
+    }
+
 	pthread_attr_init( &attr );
 
 	if ( bound )
